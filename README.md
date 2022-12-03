@@ -1,6 +1,7 @@
 # usbpydead
 
 using: 
+
 chmod +x usbpydead
 
 sudo ./usbpydead <argument>
@@ -22,6 +23,7 @@ restart - no coments
 stop - stop daemon
 
   
+    
 first start:
 
 generate new list from device (HID, USB flash, etc.)
@@ -35,6 +37,7 @@ sudo ./usbpydead startcon
 profit!
 
   
+    
 files:
   
 _.pid - temp file PID to this process not delete!
