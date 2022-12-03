@@ -1,6 +1,7 @@
 # usbpydead
 
 using: 
+chmod +x usbpydead
 sudo ./usbpydead <argument>
 
 upt - add new devices to wite list (not deleting old devices, legasy at "hot-plug")
