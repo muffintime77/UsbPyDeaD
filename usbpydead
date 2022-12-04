@@ -1,0 +1,282 @@
+#! /usr/bin/python
+# Joseph Ernest, 2016/11/12
+import sys, os, time, atexit
+from signal import signal, SIGTERM 
+whoami = str(os.popen("whoami").read())[:-1]
+patch_to_dev = "/home/"+whoami+"/.cache/usbpydead/"
+class Daemon:
+	"""
+	A generic daemon class.
+	
+	Usage: subclass the Daemon class and override the run() method
+	"""
+	def __init__(self, pidfile='/tmp/usbpydead.pid', stdin='/dev/null', stdout='/dev/null', stderr='/dev/null'):
+		self.stdin = stdin
+		self.stdout = stdout
+		self.stderr = stderr
+		self.pidfile = pidfile
+	
+	def daemonize(self):
+		"""
+		do the UNIX double-fork magic, see Stevens' "Advanced 
+		Programming in the UNIX Environment" for details (ISBN 0201563177)
+		http://www.erlenstar.demon.co.uk/unix/faq_2.html#SEC16
+		"""
+		try: 
+			pid = os.fork() 
+			if pid > 0:
+				# exit first parent
+				sys.exit(0) 
+		except OSError as e: 
+			print("error starting daemon")
+			sys.stderr.write("fork #1 failed: %d (%s)\n" % (e.errno, e.strerror))
+			sys.exit(1)
+	
+		# decouple from parent environment
+		os.setsid() 
+		os.umask(0) 
+	
+		# do second fork
+		try: 
+			pid = os.fork() 
+			if pid > 0:
+				# exit from second parent
+				sys.exit(0) 
+		except OSError as e: 
+			print("error starting daemon")
+			sys.stderr.write("fork #2 failed: %d (%s)\n" % (e.errno, e.strerror))
+			sys.exit(1) 
+	
+		# redirect standard file descriptors
+		sys.stdout.flush()
+		sys.stderr.flush()
+		si = open(os.devnull, 'r')
+		so = open(os.devnull, 'a+')
+		se = open(os.devnull, 'a+')
+		os.dup2(si.fileno(), sys.stdin.fileno())
+		os.dup2(so.fileno(), sys.stdout.fileno())
+		os.dup2(se.fileno(), sys.stderr.fileno())
+	
+		atexit.register(self.onstop)
+		signal(SIGTERM, lambda signum, stack_frame: exit())
+        
+		# write pidfile        
+		pid = str(os.getpid())
+		open(self.pidfile,'w+').write("%s\n" % pid)
+	
+	def onstop(self):
+		self.quit()
+		os.remove(self.pidfile)
+
+	def start(self):
+		"""
+		Start the daemon
+		"""
+		# Check for a pidfile to see if the daemon already runs
+		try:
+			pf = open(self.pidfile,'r')
+			pid = int(pf.read().strip())
+			pf.close()
+		except IOError:
+			pid = None
+	
+		if pid:
+			message = "pidfile %s already exist. Daemon already running?\n"
+			sys.stderr.write(message % self.pidfile)
+			sys.exit(1)
+		
+		# Start the daemon
+		self.daemonize()
+		print("starting daemon")
+		self.run()
+
+	def stop(self):
+		"""
+		Stop the daemon
+		"""
+		# Get the pid from the pidfile
+		try:
+			pf = open(self.pidfile,'r')
+			pid = int(pf.read().strip())
+			pf.close()
+		except IOError:
+			pid = None
+	
+		if not pid:
+			message = "pidfile %s does not exist. Daemon not running?\n"
+			sys.stderr.write(message % self.pidfile)
+			return # not an error in a restart
+
+		# Try killing the daemon process	
+		try:
+			while 1:
+				os.kill(pid, SIGTERM)
+				time.sleep(0.1)
+		except OSError as err:
+			err = str(err)
+			if err.find("No such process") > 0:
+				if os.path.exists(self.pidfile):
+					os.remove(self.pidfile)
+			else:
+				print(str(err))
+				sys.exit(1)
+	def status(self):
+		try:
+			f = open(self.pidfile, "r")
+			f.close()
+			print("service runing")
+		except FileNotFoundError:
+			print("service not running")
+	def restart(self):
+		"""
+		Restart the daemon
+		"""
+		self.stop()
+		self.start()
+
+	def run(self):
+		"""
+		You should override this method when you subclass Daemon. It will be called after the process has been
+		daemonized by start() or restart().
+		"""
+
+	def quit(self):
+		"""
+		You should override this method when you subclass Daemon. It will be called before the process is stopped.
+		"""
+
+
+class usbdeaddaemon(Daemon):
+	def init(self):
+		whoami = str(os.popen("whoami").read())[:-1]
+		if whoami != "root":
+			print("please run it is key from root!")
+		else:
+			whoami = input("how user use this script?\n> ")
+			os.system("mkdir "+"/home/"+whoami+"/.cache/usbpydead/")
+			os.system("chown "+whoami+" /home/"+whoami+"/.cache/usbpydead/")
+			os.system("cp usbpydead /bin/")
+	
+	def rm(self):
+		whoami = str(os.popen("whoami").read())[:-1]
+		if whoami != "root":
+			print("please run it is key from root!")
+		else:
+			os.system(str(sys.argv[0])+" stop")
+			whoami = input("how user delete this script?\n> ")
+			os.system("rm -r "+"/home/"+whoami+"/.cache/usbpydead/")
+			os.system("rm /bin/usbpydead")
+	
+	def regen(self): # генерация списка (используеться срез начиная с айди)
+		os.system(str(sys.argv[0])+" stop")
+		usb_devices = list(os.popen("lsusb").read().split("\n")) #
+		usb_devices.pop() #
+		for i in range(len(usb_devices)): # вырезаем лишнее
+			device = usb_devices[i]
+			usb_devices[i] = device[20:]
+		with open(patch_to_dev+'dev.list', 'w') as f: # сохраняем в файл
+			for i in usb_devices:
+				f.write(str(i)+"\n")
+			print("dev.list created!")
+	
+	def run (self): # функция запуска скрипта
+		with open(patch_to_dev+'dev.list', 'r') as f: # читаем из файла доверенные устройства
+			usb_devices_old = list(f.read().split("\n"))
+			usb_devices_old.pop()
+			while True:
+				usb_devices = list(os.popen("lsusb").read().split("\n"))
+				usb_devices.pop()
+				for i in range(len(usb_devices)):
+					device = usb_devices[i]
+					usb_devices[i] = device[20:]
+					
+				count1 = 0
+				for i in usb_devices_old:
+					for j in usb_devices:
+						if i == j:
+							count1 += 1
+				
+				count2 = 0
+				for i in usb_devices:
+					for j in usb_devices_old:
+						if i == j:
+							count2 += 1
+							
+	
+				if (count1 != len(usb_devices_old)) and (sys.argv[1] == "startext" or sys.argv[1] == "startall"): # сверяем со списком ожидаемых иначе тревога
+					os.system("poweroff") #------------------------ команда которая выполнится
+					break
+				
+				if (count2 != len(usb_devices)) and (sys.argv[1] == "startcon" or sys.argv[1] == "startall"): # сверяем со списком ожидаемых иначе тревога
+					os.system("poweroff") #------------------------ команда которая выполнится
+					break
+				time.sleep(1)
+				
+	def quit(self):
+		pass
+		
+	def upt(self):
+		os.system(str(sys.argv[0])+" stop")
+		mode = input("plug device and enter start mode (default: None)\n> ")
+		new_devices = list(os.popen("lsusb").read().split("\n")) #
+		new_devices.pop() #
+		for i in range(len(new_devices)): # вырезаем лишнее
+			device = new_devices[i]
+			new_devices[i] = device[20:]
+		try:
+			with open(patch_to_dev+'dev.list', 'r') as f: # читаем из файла доверенные устройства
+				usb_devices_old = list(f.read().split("\n"))
+				usb_devices_old.pop()
+				
+			all_devices = set(list(usb_devices_old + new_devices)) # получаем уникальные устр
+			with open(patch_to_dev+'dev.list', 'w') as f: # сохраняем в файл
+				for i in all_devices:
+					f.write(str(i)+"\n")
+		except FileNotFoundError:
+			with open(patch_to_dev+'dev.list', 'w') as f: # сохраняем в файл
+				for i in new_devices:
+					f.write(str(i)+"\n")
+		if mode == "startcon" or mode =="startext" or mode == "startall":
+			os.system(str(sys.argv[0])+" "+str(mode))
+			print(f"dev.list updated and service ruing {mode} mode!")
+		else:
+			print("dev.list updated! service not runing")
+
+daemon = usbdeaddaemon()
+
+if 'startcon' == sys.argv[1]: 
+	daemon.start()
+if 'startext' == sys.argv[1]: 
+	daemon.start()
+if 'startall' == sys.argv[1]: 
+	daemon.start()
+elif 'stop' == sys.argv[1]: 
+	daemon.stop()
+elif 'restart' == sys.argv[1]: 
+	daemon.restart()
+elif "upd" == sys.argv[1]:
+	daemon.upt()
+elif "new" == sys.argv[1]:
+	daemon.regen()
+elif "status" == sys.argv[1]:
+	daemon.status()
+elif "init" == sys.argv[1]:
+	daemon.init()
+elif "rm" == sys.argv[1]:
+	daemon.rm()
+elif "-h" == sys.argv[1]:
+	print("    attributes:")
+	print("status - check status runing ")
+	print("upd - add new devices to white list")
+	print("new - create new white list ")
+	print("startcon - start daemon in connect undefined devices mode")
+	print("startext - start daemon in extend defined devisec mode")
+	print("startall - start daemon in combinnate mode (not extending / not connecting)")
+	print("restart - no coments")
+	print("stop - stopped the deamon")
+	print("init - install script for user (/bin/)")
+	print("rm - remove script for user (wipe all and cache)")
+
+else:
+	print("error atribute! use -h")
+
